@@ -1,0 +1,7 @@
+git+git://github.com/openai/gym#egg=gym
+-e ./gym-hotforest
+tensorflow
+numpy
+matplotlib
+scikit-image
+
