@@ -1,0 +1,17 @@
+*.pyc
+.coverage
+.project
+.pydevproject
+.idea
+
+/venv/
+
+# tox testing
+.tox/
+
+
+# Ingore python packaging files/dirs
+/build/
+/dist/
+/*.egg-info/
+
