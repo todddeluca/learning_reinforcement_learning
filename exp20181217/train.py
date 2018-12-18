@@ -355,6 +355,7 @@ def run(args):
     length = 4 #8 # length of cellular automata board
     reward_type = 'cosine' # 'mse' #'cosine'
     cosine_noise = 0.001 # avoid divide by zero issues with cosine reward
+    start_trim = 0 # use for trimming off first n datapoints when generating plots.
     
     # make environment
     env = lvcaenv.LvcaEnv(length=length, episode_len=episode_len, 
@@ -373,7 +374,7 @@ def run(args):
              checkpoint, checkpoint_prefix)
         
     if args.test:
-        test(model, env, checkpoint, checkpoint_dir)
+        test(model, env, checkpoint, checkpoint_dir, start_trim=start_trim)
     
     
 def train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_size, train_epochs,
@@ -443,8 +444,8 @@ def train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_si
                     logits = model(observations)
                     loss = policy_gradient_loss(logits, actions, rewards)
                     losses.append(loss)
-                grads = tape.gradient(loss, model.trainable_variables)
-                optimizer.apply_gradients(zip(grads, model.trainable_variables))
+                grads = tape.gradient(loss, model.variables)
+                optimizer.apply_gradients(zip(grads, model.variables))
 
         print('done')
         print('mean training loss:', np.mean(losses))
