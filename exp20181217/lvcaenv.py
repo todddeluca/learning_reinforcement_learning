@@ -4,8 +4,22 @@ import numpy as np
 
 DEBUG = False
 
-
 '''
+On the woes of scaling population deltas:
+
+It is possible, I think, to get populations to remain within the range [0, 1], and possibly to get
+the populations to sum to 1, by fiddling with the differential equations.
+
+See:
+- https://en.wikipedia.org/wiki/Competitive_Lotka%E2%80%93Volterra_equations
+- http://www.tiem.utk.edu/~gross/bioed/bealsmodules/competition.html
+
+I have not been able to figure out:
+- how to do this
+- how to get orbiting dynamics. 
+
+Future work. :-)
+
 The problem with target_deltas, the predicted changes from the lotka-volterra differential equations,
 is that they predict absolute population changes larger than the size of the board. They do not
 "sum to one".  This is illustrated on this small 4x4 board:
@@ -30,6 +44,46 @@ This is the thinking behind the cosine lotka reward, which ignores the size of a
 favor of a direction
 '''
 
+def make_scaled_rmse_lotka_reward(alpha, beta, delta, gamma, num_states=3):
+    def reward_func(obs, next_obs):
+        # populations as fraction of board covered
+        size = np.product(obs.shape)
+        pops = (np.bincount(obs.ravel(), minlength=num_states) / size)[1:]
+        next_pops = (np.bincount(next_obs.ravel(), minlength=num_states) / size)[1:]
+        
+        # staring at the orbits at
+        # https://en.wikipedia.org/wiki/Lotka%E2%80%93Volterra_equations#Phase-space_plot_of_a_further_example
+        # I want populations to be in the range 0..3 for predator and 0..5 for prey
+        # In particular, I want 50% predator and 50% prey to be around 2 and 3.5 respectively
+        # once scaled.
+        # note: these numbers are specific to alpha=2/3, beta=4/3, delta=1, gamma=1
+        scale = np.array([3.5/0.5, 2.0/0.5]) # state 0 is ignored
+        scaled_pops = pops * scale
+
+        # actual prey and predator population changes
+        obs_deltas = (next_pops - pops).astype(float)
+
+        # predicted prey and predator population changes
+        target_prey_delta = alpha * scaled_pops[0] - beta * scaled_pops[0] * scaled_pops[1]
+        target_predator_delta = delta * scaled_pops[0] * scaled_pops[1] - gamma * scaled_pops[1]
+        scaled_target_deltas = np.array([target_prey_delta, target_predator_delta])
+        target_deltas = scaled_target_deltas / scale
+
+        # reward: - root mean squared error
+        reward = -np.sqrt(np.mean((obs_deltas - target_deltas)**2))
+
+        if DEBUG:
+            print('pops:', pops, 'next_pops:', next_pops)
+            print('scaled_pops:', scaled_pops)
+            print('obs_deltas:', obs_deltas)
+            print('scaled_target_deltas:', scaled_target_deltas)
+            print('target_deltas:', target_deltas)
+            print('reward:', reward)
+
+        return reward
+    return reward_func
+    
+        
 def get_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states):
     pops = np.bincount(obs.ravel(), minlength=num_states)
     next_pops = np.bincount(next_obs.ravel(), minlength=num_states)
@@ -49,11 +103,12 @@ def get_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states):
     return obs_deltas, target_deltas
     
 
-def make_mse_lotka_reward(alpha, beta, delta, gamma, num_states=3):
+def make_mse_lotka_reward(alpha, beta, delta, gamma, num_states=3, rmse=False):
     def reward(obs, next_obs):
         '''
         obs: a CA board
         next_obs: the CA board at the next time step
+        rmse: True if reward is -RMSE, False if reward is MSE
         returns: -1 * MSE between the population changes of predator and prey predicted by 
           the lotka-volterra model and the observed changes.
 
@@ -79,10 +134,15 @@ def make_mse_lotka_reward(alpha, beta, delta, gamma, num_states=3):
         obs_deltas, target_deltas = get_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states)
         
         # mse between target and observed
-        rwd = np.mean((obs_deltas - target_deltas)**2)
+        mse = np.mean((obs_deltas - target_deltas)**2)
+        if rmse:
+            rwd = -np.sqrt(mse)
+        else:
+            rwd = -mse
+        
         
         if DEBUG:
-            print('mse reward:', rwd)
+            print('reward:', rwd)
 
         return rwd
     
@@ -113,51 +173,6 @@ def make_cosine_lotka_reward(alpha, beta, delta, gamma, debug=False, num_states=
         return rwd
     
     return reward
-
-
-'''
-It is possible, I think, to get populations to remain within the range [0, 1], and possibly to get
-the populations to sum to 1, by fiddling with the differential equations.
-
-See:
-- https://en.wikipedia.org/wiki/Competitive_Lotka%E2%80%93Volterra_equations
-- http://www.tiem.utk.edu/~gross/bioed/bealsmodules/competition.html
-
-I have not been able to figure out:
-- how to do this
-- how to get orbiting dynamics. 
-
-Future work. :-)
-'''
-def get_competitive_lotka_deltas(obs, next_obs, r1, r2, a11, a12, a21, a22, num_states):
-    pops = np.bincount(obs.ravel(), minlength=num_states)
-    next_pops = np.bincount(next_obs.ravel(), minlength=num_states)
-
-    # normalize populations by board size
-    size = np.product(obs.shape) # num cells on the board
-    pops = pops / size
-    next_pops = next_pops / size
-
-    # alpha=2/3, beta=4/3, delta=1, gamma=1
-    target_prey_delta = (r1 * pops[1])(1 - a11 * pops[1] - a12 * pops[2]) # K1 = 1, r1 = alpha, a12 = beta/alpha
-    target_pred_delta = (r2 * pops[2])(1 - a22 * pops[2] - a21 * pops[1]) # K2 = 1, r2 = -gamma, a21 = delta/gamma
-    
-    # actual prey and predator population changes
-    obs_deltas = (next_pops - pops)[1:]
-
-    # predicted prey and predator population changes
-    target_prey_delta = alpha * pops[1] - beta * pops[1] * pops[2]
-    target_predator_delta = delta * pops[1] * pops[2] - gamma * pops[2]
-    target_deltas = np.array([target_prey_delta, target_predator_delta])
-
-    if DEBUG:
-        print('pops:', pops, 'next_pops:', next_pops)
-        print('obs_deltas:', obs_deltas, 'target_deltas:', target_deltas)
-
-    return obs_deltas, target_deltas
-    
-
-
 
 
 def random_state_dist(num_states=3):
@@ -210,6 +225,10 @@ class LvcaEnv:
     
         if reward_type == 'mse':
             self.reward_func = make_mse_lotka_reward(alpha, beta, delta, gamma)
+        elif reward_type == 'rmse':
+            self.reward_func = make_mse_lotka_reward(alpha, beta, delta, gamma, rmse=True)
+        elif reward_type == 'scaled_rmse':
+            self.reward_func = make_scaled_rmse_lotka_reward(alpha, beta, delta, gamma)
         elif reward_type == 'cosine':
             self.reward_func = make_cosine_lotka_reward(alpha, beta, delta, gamma, noise=cosine_noise)
         else:
@@ -242,7 +261,7 @@ def main():
     global DEBUG
     DEBUG = True
     num_eps = 10
-    env = LvcaEnv(4, episode_len=10, reward_type='cosine', cosine_noise=0.001)
+    env = LvcaEnv(4, episode_len=10, reward_type='rmse', cosine_noise=0.001)
     for i in range(num_eps):
         board = env.reset()
         env.render()
