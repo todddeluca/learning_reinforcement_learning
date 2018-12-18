@@ -46,44 +46,52 @@ favor of a direction
 
 def make_scaled_rmse_lotka_reward(alpha, beta, delta, gamma, num_states=3):
     def reward_func(obs, next_obs):
-        # populations as fraction of board covered
-        size = np.product(obs.shape)
-        pops = (np.bincount(obs.ravel(), minlength=num_states) / size)[1:]
-        next_pops = (np.bincount(next_obs.ravel(), minlength=num_states) / size)[1:]
-        
-        # staring at the orbits at
-        # https://en.wikipedia.org/wiki/Lotka%E2%80%93Volterra_equations#Phase-space_plot_of_a_further_example
-        # I want populations to be in the range 0..3 for predator and 0..5 for prey
-        # In particular, I want 50% predator and 50% prey to be around 2 and 3.5 respectively
-        # once scaled.
-        # note: these numbers are specific to alpha=2/3, beta=4/3, delta=1, gamma=1
-        scale = np.array([3.5/0.5, 2.0/0.5]) # state 0 is ignored
-        scaled_pops = pops * scale
-
-        # actual prey and predator population changes
-        obs_deltas = (next_pops - pops).astype(float)
-
-        # predicted prey and predator population changes
-        target_prey_delta = alpha * scaled_pops[0] - beta * scaled_pops[0] * scaled_pops[1]
-        target_predator_delta = delta * scaled_pops[0] * scaled_pops[1] - gamma * scaled_pops[1]
-        scaled_target_deltas = np.array([target_prey_delta, target_predator_delta])
-        target_deltas = scaled_target_deltas / scale
+        obs_deltas, target_deltas = get_scaled_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states)
 
         # reward: - root mean squared error
         reward = -np.sqrt(np.mean((obs_deltas - target_deltas)**2))
 
         if DEBUG:
-            print('pops:', pops, 'next_pops:', next_pops)
-            print('scaled_pops:', scaled_pops)
-            print('obs_deltas:', obs_deltas)
-            print('scaled_target_deltas:', scaled_target_deltas)
-            print('target_deltas:', target_deltas)
             print('reward:', reward)
 
         return reward
     return reward_func
     
-        
+
+def get_scaled_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states):
+    # populations as fraction of board covered
+    size = np.product(obs.shape)
+    pops = (np.bincount(obs.ravel(), minlength=num_states) / size)[1:]
+    next_pops = (np.bincount(next_obs.ravel(), minlength=num_states) / size)[1:]
+
+    # staring at the orbits at
+    # https://en.wikipedia.org/wiki/Lotka%E2%80%93Volterra_equations#Phase-space_plot_of_a_further_example
+    # I want populations to be in the range 0..3 for predator and 0..5 for prey
+    # In particular, I want 50% predator and 50% prey to be around 2 and 3.5 respectively
+    # once scaled.
+    # note: these numbers are specific to alpha=2/3, beta=4/3, delta=1, gamma=1
+    scale = np.array([3.5/0.5, 2.0/0.5]) # state 0 is ignored
+    scaled_pops = pops * scale
+
+    # actual prey and predator population changes
+    obs_deltas = (next_pops - pops).astype(float)
+
+    # predicted prey and predator population changes
+    target_prey_delta = alpha * scaled_pops[0] - beta * scaled_pops[0] * scaled_pops[1]
+    target_predator_delta = delta * scaled_pops[0] * scaled_pops[1] - gamma * scaled_pops[1]
+    scaled_target_deltas = np.array([target_prey_delta, target_predator_delta])
+    target_deltas = scaled_target_deltas / scale
+
+    if DEBUG:
+        print('pops:', pops, 'next_pops:', next_pops)
+        print('scaled_pops:', scaled_pops)
+        print('obs_deltas:', obs_deltas)
+        print('scaled_target_deltas:', scaled_target_deltas)
+        print('target_deltas:', target_deltas)
+
+    return obs_deltas, target_deltas
+
+
 def get_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states):
     pops = np.bincount(obs.ravel(), minlength=num_states)
     next_pops = np.bincount(next_obs.ravel(), minlength=num_states)
@@ -149,9 +157,17 @@ def make_mse_lotka_reward(alpha, beta, delta, gamma, num_states=3, rmse=False):
     return reward
 
 
-def make_cosine_lotka_reward(alpha, beta, delta, gamma, debug=False, num_states=3, noise=None):
+def make_cosine_lotka_reward(alpha, beta, delta, gamma, debug=False, num_states=3, noise=None, scaled=False):
+    '''
+    Cosine reward gives a reward for moving in the direction of the lotka-volterra derivatives.
+    This sidesteps the problem of determining how far to move in the direction.
+    '''
     def reward(obs, next_obs):
-        obs_deltas, target_deltas = get_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states)
+        if scaled:
+            obs_deltas, target_deltas = get_scaled_lotka_deltas(
+                obs, next_obs, alpha, beta, delta, gamma, num_states)
+        else:
+            obs_deltas, target_deltas = get_lotka_deltas(obs, next_obs, alpha, beta, delta, gamma, num_states)
         
         # add some jitter to avoid the case where obs_deltas is all zeros.
         if noise:
@@ -231,6 +247,8 @@ class LvcaEnv:
             self.reward_func = make_scaled_rmse_lotka_reward(alpha, beta, delta, gamma)
         elif reward_type == 'cosine':
             self.reward_func = make_cosine_lotka_reward(alpha, beta, delta, gamma, noise=cosine_noise)
+        elif reward_type == 'scaled_cosine':
+            self.reward_func = make_cosine_lotka_reward(alpha, beta, delta, gamma, noise=cosine_noise, scaled=True)
         else:
             raise Exception('Unknown reward type', reward_type)
             

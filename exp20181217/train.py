@@ -4,25 +4,32 @@ Policy Gradients, LVCA, Eager Tensorflow
 
 https://github.com/tensorflow/tensorflow/blob/r1.11/tensorflow/contrib/eager/python/examples/generative_examples/dcgan.ipynb
 
+DONE
+====
+
+- fixed major bug, where instead of saving (observation, action, reward) to buffer,
+  I was saving (next_observation, action, reward). The observation did not correspond
+  to the action or reward!
+  
 TODO
 ====
 
-- visualizations:
-  - population trajectories
+- use baseline: (r - mean(r)/std(r)) or (r - mean(r)) or r - v(s)
+- use return: this is a temporal problem. worth rewarding actions that lead to future good things.
+- output model description: graph, number of params
 - env/reward in tensorflow. for this game, env just gives reward, since action is next board.
   - reward
 - memory
   - model input: memory + board board
   - model output: next memory + next board
-- metrics: 
-  - mean reward (buffering)
-  - mean entropy (buffering)
-  - mean loss (training)
-  - population trajectories
-- use reward baseline: (r - mean(r)/std(r)) or (r - mean(r)) or r - v(s)
+- neighborhood: stack conv layers to create larger neighborhood. does that improve performance?
+- tensorboard metrics:
+  - mean reward (buffering) over time
+  - mean entropy (buffering) over time
+  - mean loss (training) over time
+  - population trajectories over time?
 - replay buffer: get right balance between gathering experiences and training model.
   - use old experiences, like DQN or SAC?
-- use return?
 - hyperparam tuning
 - training loop: get the right balance between gathering experiences and training model
 - convnet model architecture for bigger boards?
@@ -32,7 +39,11 @@ RESULTS
 
 model01, cosine error, board length 8, model01, strategy: looks ok? wonder what the trajectories look like?
 model02, mse error, length 6, strategy: kill the sheep then alternate empty and predators every round
-model03, rmse error, length 8
+model03, rmse error, length 8, strat: kill most of the sheep, split board between empty and predator square that alternate each round
+model04, scaled rmse, length 8, strat: kill most of the sheep, alternating 50/50 empty/predator squares.
+model05, scaled cosine, length 8
+model06, scaled cosine, length 8, fixed obs-action mismatch in buffer, centered rewards, 8-step episodes
+model07, cosine, length 8, centered rewards, 8-step episodes. strat: mostly pred, less empty, few prey.
 '''
 
 
@@ -62,7 +73,7 @@ def make_movie(boards, movie_path):
     norm = matplotlib.colors.Normalize(vmin=0,vmax=2)
 
     # make a movie figure
-    movie_writer = animation.writers['ffmpeg'](fps=10)
+    movie_writer = animation.writers['ffmpeg'](fps=4)
     fig = plt.figure()
     ax = fig.add_subplot(111) # create a single subplot
     board = boards[0] # peek at first board to create image object
@@ -278,22 +289,71 @@ def make_model_optimizer_checkpoint(num_states, length, learning_rate, data_dir,
     
     return model, optimizer, checkpoint, checkpoint_dir, checkpoint_prefix
     
-    
-def train():
-    
+
+def play(model, env, episodes=1, movie_path=None):
+    rewards = []
+    populations = []
+    entropies = []
+    for i_eps in range(episodes):
+        
+        obs = env.reset()
+        episode_observations = [obs]
+        population = np.bincount(obs.ravel(), minlength=env.num_states) / (env.length ** 2)
+        populations.append(population)
+        
+        actions = []
+        max_timesteps = 10000
+        for i in range(max_timesteps):
+            env.render()
+            # obs_batch is (1, length, length) shape array of observations
+            obs_batch = obs[None].astype(np.float64) # prepend batch dimension to make batch of size 1
+            # logits is (1, num_actions) shape array of action logits
+            logits = model.predict(obs_batch)
+            entropy = policy_entropy(logits, mean=True)
+#             print('entropy:', entropy)
+            entropies.append(entropy)
+#             print('logits:', logits)
+            action = sample_board(logits)[0] # batch size of 1
+#             print('action:', action)
+            next_obs, reward, done, info = env.step(action.numpy())
+            print('reward:', reward)
+            episode_observations.append(next_obs)
+            rewards.append(reward)
+            actions.append(action)
+            
+            population = np.bincount(obs.ravel(), minlength=env.num_states) / (env.length ** 2)
+            populations.append(population)
+            print('population:', population)
+            if done:
+                break
+
+        env.render()
+        if movie_path:
+            make_movie(episode_observations, movie_path)
+            
+        print('rewards:', rewards)
+        # print('actions:', actions)
+        
+    return rewards, populations, entropies
+
+
+def run(args):
+
+
     exp_id = 'exp20181217'
-    model_id = 'model04'
+    model_id = 'model09'
     data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
-    shuffle_size = 1024 
+    shuffle_size = 1024 # 
     batch_size = 32
-    buffer_size = 1024
+    num_episodes = 32 #128
+    episode_len = 8 # number of time steps of cellular automata
+    buffer_size = num_episodes * episode_len
     buffer_epochs = 10 # number of times to collect a buffer of experiences
     train_epochs = 2 # number of times to train model on each buffer
-    n_epoch = 100
+    num_epoch = 100
     learning_rate=1e-5
-    length = 8 # length of cellular automata board
-    episode_len = 32 # number of time steps of cellular automata
-    reward_type = 'scaled_rmse' # 'mse' #'cosine'
+    length = 4 #8 # length of cellular automata board
+    reward_type = 'cosine' # 'mse' #'cosine'
     cosine_noise = 0.001 # avoid divide by zero issues with cosine reward
     
     # make environment
@@ -307,41 +367,61 @@ def train():
     # make model, optimizer, checkpoint
     model, optimizer, checkpoint, checkpoint_dir, checkpoint_prefix = make_model_optimizer_checkpoint(
         num_states, length, learning_rate, data_dir, model_id)
-
+    
+    if args.train:
+        train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_size, train_epochs,
+             checkpoint, checkpoint_prefix)
+        
+    if args.test:
+        test(model, env, checkpoint, checkpoint_dir)
+    
+    
+def train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_size, train_epochs,
+          checkpoint, checkpoint_prefix):
+    
     # lets do this thing!
-    for i_epoch in range(n_epoch):
+    for i_epoch in range(num_epoch):
         print('epoch', i_epoch)
         
         # fill replay buffer with experiences
         buffer = []
-        done = False
-        obs = env.reset()
-        print('first obs:', obs)
-        episode_count = 0
         entropies = []
         rewards = []
-        for i_buf in range(buffer_size):        
-            # obs_batch is (1, length, length) shape array of observations
-            obs_batch = obs[None].astype(np.float32) # prepend batch dimension to make batch of size 1
-            # logits is (1, length, length, num_states) shape array of next state logits
-            logits = model.predict(obs_batch)
-            entropy = policy_entropy(logits, mean=True)
-#             print('entropy:', entropy)
-            entropies.append(entropy)
-            # print('logits:', logits)
-            action = sample_board(logits)[0].numpy() # batch size of 1
-            # print('action:', action)
-            obs, reward, done, info = env.step(action)
-            rewards.append(reward)
-            buffer.append((obs, action, reward))
-            if done:
-                episode_count += 1
-                # start new episode
-                obs = env.reset()
-                done = False
+        returns = []
+        for i_epi in range(num_episodes):
+            episode_rewards = []
+            episode_obs = []
+            episode_actions = []
+            obs = env.reset()
+            done = False
+            while not done:
+                # obs_batch is (1, length, length) shape array of observations
+                obs_batch = obs[None].astype(np.float32) # prepend batch dimension to make batch of size 1
+                # logits is (1, length, length, num_states) shape array of next state logits
+                logits = model.predict(obs_batch)
+                entropy = policy_entropy(logits, mean=True)
+    #             print('entropy:', entropy)
+                entropies.append(entropy)
+                # print('logits:', logits)
+                action = sample_board(logits)[0].numpy() # batch size of 1
+                # print('action:', action)
+                next_obs, reward, done, info = env.step(action)
+                episode_rewards.append(reward)
+                rewards.append(reward)
+                episode_obs.append(obs)
+                episode_actions.append(action)
+                obs = next_obs
+                if done:
+                    # turn rewards into returns
+                    episode_returns = np.cumsum(episode_rewards)
+                    # normalize/baseline returns 
+                    norm_epi_returns = (episode_returns - np.mean(episode_returns)) / np.std(episode_returns)
+                    centered_epi_rewards = np.array(episode_rewards) - np.mean(episode_rewards)
+                    buffer.extend(zip(episode_obs, episode_actions, centered_epi_rewards))
+                    returns.extend(norm_epi_returns)
+                    
         
         print('last obs:', obs)
-        print('episode count:', episode_count)
         mean_entropy = np.mean(entropies)
         print('mean entropy:', mean_entropy)
         print('mean reward:', np.mean(rewards))
@@ -378,30 +458,7 @@ def train():
     play(model, env, episodes=4)
 
 
-def test(movie_path=None):
-    exp_id = 'exp20181217'
-    model_id = 'model01'
-    data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
-    shuffle_size = 1024 
-    batch_size = 32
-    buffer_size = 1024
-    buffer_epochs = 10 # number of times to collect a buffer of experiences
-    train_epochs = 2 # number of times to train model on each buffer
-    n_epoch = 100
-    learning_rate=1e-5
-    length = 32 # length of cellular automata board
-    episode_len = 256 # number of time steps of cellular automata
-    reward_type = 'rmse' #'cosine'
-    cosine_noise = 0.001 # avoid divide by zero issues with cosine reward
-    
-    # make environment
-    env = lvcaenv.LvcaEnv(length=length, episode_len=episode_len, 
-                          reward_type=reward_type, cosine_noise=cosine_noise)
-    num_states = env.num_states
-    
-    # make model, optimizer, checkpoint
-    model, optimizer, checkpoint, checkpoint_dir, checkpoint_prefix = make_model_optimizer_checkpoint(
-        num_states, length, learning_rate, data_dir, model_id)
+def test(model, env, checkpoint, checkpoint_dir, movie_path=None, start_trim=0):
     
     # restore model and optimizer from latest checkpoint
     checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
@@ -411,54 +468,8 @@ def test(movie_path=None):
                                              state_props_list=populations, 
                                              prop_trajectory_states=(1,2),
                                              entropies=entropies,
-                                             start_trim=100)
+                                             start_trim=start_trim)
 
-
-def play(model, env, episodes=1, movie_path=None):
-    rewards = []
-    populations = []
-    entropies = []
-    for i_eps in range(episodes):
-        
-        obs = env.reset()
-        episode_observations = [obs]
-        population = np.bincount(obs.ravel(), minlength=env.num_states) / (env.length ** 2)
-        populations.append(population)
-        
-        actions = []
-        max_timesteps = 10000
-        for i in range(max_timesteps):
-            env.render()
-            # obs_batch is (1, length, length) shape array of observations
-            obs_batch = obs[None].astype(np.float64) # prepend batch dimension to make batch of size 1
-            # logits is (1, num_actions) shape array of action logits
-            logits = model.predict(obs_batch)
-            entropy = policy_entropy(logits, mean=True)
-#             print('entropy:', entropy)
-            entropies.append(entropy)
-#             print('logits:', logits)
-            action = sample_board(logits)[0] # batch size of 1
-#             print('action:', action)
-            obs, reward, done, info = env.step(action.numpy())
-            print('reward:', reward)
-            episode_observations.append(obs)
-            rewards.append(reward)
-            actions.append(action)
-            
-            population = np.bincount(obs.ravel(), minlength=env.num_states) / (env.length ** 2)
-            populations.append(population)
-            print('population:', population)
-            if done:
-                break
-
-        env.render()
-        if movie_path:
-            make_movie(episode_observations, movie_path)
-            
-        print('rewards:', rewards)
-        # print('actions:', actions)
-        
-    return rewards, populations, entropies
 
 
 def main():
@@ -468,14 +479,11 @@ def main():
     tf.enable_eager_execution()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--play', default=False, action='store_true')
+    parser.add_argument('--train', default=False, action='store_true')
+    parser.add_argument('--test', default=False, action='store_true')
     parser.add_argument('--movie-path', default=None)
     args = parser.parse_args()
-
-    if args.play:
-        test(movie_path=args.movie_path)
-    else:
-        train()
+    run(args)
         
 
 
