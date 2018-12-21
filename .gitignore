@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Mac OS Stuff
+.DS_Store
+
 # movies
 *.mp4
 
