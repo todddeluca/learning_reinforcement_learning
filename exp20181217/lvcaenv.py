@@ -229,6 +229,10 @@ class LvcaEnv:
         self.num_states = 3
         self.episode_len = episode_len
         self.reset() # initialize the board
+        print('num_states:', self.num_states)
+        print('length:', self.length)
+        print('reward_type:', reward_type)
+        print('episode_len:', episode_len)
         
         self.alpha = alpha
         self.beta = beta

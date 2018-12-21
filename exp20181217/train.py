@@ -1,20 +1,30 @@
 '''
 Policy Gradients, LVCA, Eager Tensorflow
 
+Useful example of tensorflow code:
+- https://github.com/tensorflow/tensorflow/blob/r1.11/tensorflow/contrib/eager/python/examples/generative_examples/dcgan.ipynb
 
-https://github.com/tensorflow/tensorflow/blob/r1.11/tensorflow/contrib/eager/python/examples/generative_examples/dcgan.ipynb
-
+Why does the agent suck so bad?
+- I'm overfitting the data
+- The agent is learning to maximize the reward but the reward function is hard for a CA to learn
+  - need a new reward function?
+  
 DONE
 ====
 
 - fixed major bug, where instead of saving (observation, action, reward) to buffer,
   I was saving (next_observation, action, reward). The observation did not correspond
   to the action or reward!
+- use baseline: (r - mean(r)/std(r)) or (r - mean(r)) or r - v(s)
+- tensorboard metrics:
+  - mean reward (buffering) over time
+  - mean entropy (buffering) over time
+  - mean loss (training) over time
   
 TODO
 ====
 
-- use baseline: (r - mean(r)/std(r)) or (r - mean(r)) or r - v(s)
+- periodic padding of CA board: https://stackoverflow.com/questions/39088489/tensorflow-periodic-padding
 - use return: this is a temporal problem. worth rewarding actions that lead to future good things.
 - output model description: graph, number of params
 - env/reward in tensorflow. for this game, env just gives reward, since action is next board.
@@ -23,16 +33,12 @@ TODO
   - model input: memory + board board
   - model output: next memory + next board
 - neighborhood: stack conv layers to create larger neighborhood. does that improve performance?
+- sanity check: learn to immitate the stochastic predator-prey model (sppm). reward is -cross-entropy between agent action and sppm next board
 - tensorboard metrics:
-  - mean reward (buffering) over time
-  - mean entropy (buffering) over time
-  - mean loss (training) over time
   - population trajectories over time?
 - replay buffer: get right balance between gathering experiences and training model.
   - use old experiences, like DQN or SAC?
 - hyperparam tuning
-- training loop: get the right balance between gathering experiences and training model
-- convnet model architecture for bigger boards?
 
 RESULTS
 =======
@@ -44,19 +50,26 @@ model04, scaled rmse, length 8, strat: kill most of the sheep, alternating 50/50
 model05, scaled cosine, length 8
 model06, scaled cosine, length 8, fixed obs-action mismatch in buffer, centered rewards, 8-step episodes
 model07, cosine, length 8, centered rewards, 8-step episodes. strat: mostly pred, less empty, few prey.
+model08, cosine, bigger neighborhood (kernel size 5, 5-hood). very quickly learns all 2's.
+model08, scaled rmse, bigger neighborhood. 
+model11, cosine, 5-hood, periodic boundaries
 '''
 
 
 from pathlib import Path
-import lvcaenv
-
 import argparse
-
-import numpy as np
-import tensorflow as tf
 from matplotlib import animation
 import matplotlib.pyplot as plt
 import matplotlib.colors
+import numpy as np
+
+import tensorflow as tf
+import tensorflow.contrib.eager as tfe
+tf.enable_eager_execution()
+
+import lvcaenv
+
+
 
 
 def make_movie(boards, movie_path):
@@ -200,27 +213,75 @@ class CAModel(tf.keras.Model):
     To be a cellular automata, this model only looks at neighborhood information once,
     via a Conv2d layer with a (3, 3) kernel
     '''
-    def __init__(self, num_states, input_shape):
+    def __init__(self, num_states, kernel_size=3, periodic=False):
         '''
         num_states: 
         '''
         super().__init__()
         self.num_states = num_states
-        self.reshape1 = tf.keras.layers.Reshape(list(input_shape) + [1], input_shape=input_shape) # add channel dimension
-        self.conv1 = tf.keras.layers.Conv2D(64, (3, 3), strides=(1, 1), padding='same', activation='elu') # neighborhood
+        self.periodic = periodic
+        if periodic:
+            padding = 'valid'
+            self.pad_size = (kernel_size - 1) // 2
+        else:
+            padding = 'same'
+        self.conv1 = tf.keras.layers.Conv2D(64, kernel_size=kernel_size, strides=(1, 1), padding=padding,
+                                            activation='elu') # neighborhood
         self.conv2 = tf.keras.layers.Conv2D(128, (1, 1), strides=(1, 1), padding='same', activation='elu')
         self.conv3 = tf.keras.layers.Conv2D(128, (1, 1), strides=(1, 1), padding='same', activation='elu')
         self.conv4 = tf.keras.layers.Conv2D(num_states, (1, 1), strides=(1, 1), padding='same') # logits
 
     def call(self, x):
-        x = self.reshape1(x)
+        if self.periodic:
+            x = periodic_padding(x, padding=self.pad_size)
+        x = tf.expand_dims(x, axis=-1)
         x = self.conv1(x)
+        tf.contrib.summary.histogram('conv1_act', x)
+        tf.contrib.summary.histogram('conv1_w', self.conv1.weights[0])
+        tf.contrib.summary.histogram('conv1_b', self.conv1.weights[1])
         x = self.conv2(x)
+        tf.contrib.summary.histogram('conv2_act', x)
+        tf.contrib.summary.histogram('conv2_w', self.conv2.weights[0])
+        tf.contrib.summary.histogram('conv2_b', self.conv2.weights[1])
         x = self.conv3(x)
+        tf.contrib.summary.histogram('conv3_act', x)
+        tf.contrib.summary.histogram('conv3_w', self.conv3.weights[0])
+        tf.contrib.summary.histogram('conv3_b', self.conv3.weights[1])
         x = self.conv4(x)
+        tf.contrib.summary.histogram('conv4_act', x)
+        tf.contrib.summary.histogram('conv4_w', self.conv4.weights[0])
+        tf.contrib.summary.histogram('conv4_b', self.conv4.weights[1])
         return x
+   
 
+def periodic_padding(x, padding=1):
+    '''
+    x: shape (batch_size, d1, d2)
+    return x padded with periodic boundaries. i.e. torus or donut
+    '''
+    d1 = x.shape[1] # dimension 1: height
+    d2 = x.shape[2] # dimension 2: width
+    p = padding
+    # assemble padded x from slices
+    #            tl,tc,tr
+    # padded_x = ml,mc,mr
+    #            bl,bc,br
+    top_left = x[:, -p:, -p:] # top left
+    top_center = x[:, -p:, :] # top center
+    top_right = x[:, -p:, :p] # top right
+    middle_left = x[:, :, -p:] # middle left
+    middle_center = x # middle center
+    middle_right = x[:, :, :p] # middle right
+    bottom_left = x[:, :p, -p:] # bottom left
+    bottom_center = x[:, :p, :] # bottom center
+    bottom_right = x[:, :p, :p] # bottom right
+    top = tf.concat([top_left, top_center, top_right], axis=2)
+    middle = tf.concat([middle_left, middle_center, middle_right], axis=2)
+    bottom = tf.concat([bottom_left, bottom_center, bottom_right], axis=2)
+    padded_x = tf.concat([top, middle, bottom], axis=1)
+    return padded_x
     
+
 def policy_gradient_loss(logits, actions, rewards):
     '''
     Loss is: -A * log(p), where A is the advantage. A simple form of advantage is normalized reward.
@@ -274,20 +335,6 @@ def sample_board(logits):
     board = tf.multinomial(logits=logits, num_samples=1)
     board = tf.reshape(board, dims[:-1])
     return board
-
-
-def make_model_optimizer_checkpoint(num_states, length, learning_rate, data_dir, model_id):
-    # make model
-    model = CAModel(num_states, input_shape=[length, length])
-    optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate)
-#     optimizer=tf.train.AdamOptimizer(0.001)
-#     optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
-    
-    checkpoint_dir = data_dir / f'{model_id}_checkpoints'
-    checkpoint_prefix = checkpoint_dir / 'ckpt'
-    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
-    
-    return model, optimizer, checkpoint, checkpoint_dir, checkpoint_prefix
     
 
 def play(model, env, episodes=1, movie_path=None):
@@ -313,14 +360,15 @@ def play(model, env, episodes=1, movie_path=None):
 #             print('entropy:', entropy)
             entropies.append(entropy)
 #             print('logits:', logits)
-            action = sample_board(logits)[0] # batch size of 1
+            action = sample_board(logits)[0].numpy() # batch size of 1
 #             print('action:', action)
-            next_obs, reward, done, info = env.step(action.numpy())
+            next_obs, reward, done, info = env.step(action)
             print('reward:', reward)
-            episode_observations.append(next_obs)
             rewards.append(reward)
             actions.append(action)
             
+            obs = next_obs
+            episode_observations.append(obs)
             population = np.bincount(obs.ravel(), minlength=env.num_states) / (env.length ** 2)
             populations.append(population)
             print('population:', population)
@@ -341,49 +389,78 @@ def run(args):
 
 
     exp_id = 'exp20181217'
-    model_id = 'model09'
+    model_id = 'model11'
     data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
-    shuffle_size = 1024 # 
     batch_size = 32
-    num_episodes = 32 #128
-    episode_len = 8 # number of time steps of cellular automata
+    num_episodes = 64
+    episode_len = 16 # 128 # number of time steps of cellular automata
     buffer_size = num_episodes * episode_len
+    shuffle_size = buffer_size # 
     buffer_epochs = 10 # number of times to collect a buffer of experiences
     train_epochs = 2 # number of times to train model on each buffer
     num_epoch = 100
     learning_rate=1e-5
-    length = 4 #8 # length of cellular automata board
-    reward_type = 'cosine' # 'mse' #'cosine'
+    length = 8 # length of cellular automata board
+    reward_type = 'cosine' #'scaled_rmse' # 'mse' #'cosine'
     cosine_noise = 0.001 # avoid divide by zero issues with cosine reward
     start_trim = 0 # use for trimming off first n datapoints when generating plots.
+    checkpoint_dir = data_dir / f'{model_id}_checkpoints'
+    checkpoint_prefix = checkpoint_dir / 'ckpt'
+    log_dir = data_dir / f'log/{model_id}/1'
+    num_states = 3
+    kernel_size = 5 # 3 # size of neighborhood
+    periodic = True # board has periodic boundaries
     
-    # make environment
-    env = lvcaenv.LvcaEnv(length=length, episode_len=episode_len, 
-                          reward_type=reward_type, cosine_noise=cosine_noise)
-    num_states = env.num_states
-    length = env.length
-    print('num_states:', num_states)
-    print('length:', length)
-
-    # make model, optimizer, checkpoint
-    model, optimizer, checkpoint, checkpoint_dir, checkpoint_prefix = make_model_optimizer_checkpoint(
-        num_states, length, learning_rate, data_dir, model_id)
-    
-    if args.train:
-        train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_size, train_epochs,
-             checkpoint, checkpoint_prefix)
+    # tensorboard setup
+    global_step = tf.train.create_global_step()
+    summary_writer = tf.contrib.summary.create_file_writer(str(log_dir), flush_millis=10000)
+    with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
+        model = CAModel(num_states, kernel_size=kernel_size, periodic=periodic)
         
+#     optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate)
+    optimizer=tf.train.AdamOptimizer(learning_rate=learning_rate)
+#     optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)    
+    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+    
+    if args.model_summary:
+        length = 4
+        episode_len = 1
+        num_epoch = 1
+        num_episodes = 1
+        # make environment
+        env = lvcaenv.LvcaEnv(length=length, episode_len=episode_len, 
+                              reward_type=reward_type, cosine_noise=cosine_noise)
+        # dummy training to initialize model (without saving a checkpoint)
+        train(model, env, optimizer, num_epoch=1, num_episodes=1, shuffle_size=shuffle_size, batch_size=batch_size, train_epochs=1)
+        model.summary()
+        return # don't train dummy model?
+
+    if args.train:
+        # make environment
+        env = lvcaenv.LvcaEnv(length=length, episode_len=episode_len, 
+                              reward_type=reward_type, cosine_noise=cosine_noise)
+        with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
+            train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_size, train_epochs,
+                 checkpoint, checkpoint_prefix)
+
     if args.test:
-        test(model, env, checkpoint, checkpoint_dir, start_trim=start_trim)
+        length = 32
+        episode_len = 128
+        # make environment
+        env = lvcaenv.LvcaEnv(length=length, episode_len=episode_len, 
+                              reward_type=reward_type, cosine_noise=cosine_noise)
+        test(model, env, checkpoint, checkpoint_dir, start_trim=start_trim, movie_path=args.movie_path)
     
     
 def train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_size, train_epochs,
-          checkpoint, checkpoint_prefix):
+          checkpoint=None, checkpoint_prefix=None, log_dir=None):
+    
+    global_step = tf.train.get_global_step()
     
     # lets do this thing!
     for i_epoch in range(num_epoch):
         print('epoch', i_epoch)
-        
+
         # fill replay buffer with experiences
         buffer = []
         entropies = []
@@ -420,43 +497,51 @@ def train(model, env, optimizer, num_epoch, num_episodes, shuffle_size, batch_si
                     centered_epi_rewards = np.array(episode_rewards) - np.mean(episode_rewards)
                     buffer.extend(zip(episode_obs, episode_actions, centered_epi_rewards))
                     returns.extend(norm_epi_returns)
-                    
-        
+
+
         print('last obs:', obs)
         mean_entropy = np.mean(entropies)
         print('mean entropy:', mean_entropy)
-        print('mean reward:', np.mean(rewards))
-        
+        tf.contrib.summary.scalar('mean_entropy', mean_entropy)
+
+        mean_reward = np.mean(rewards)
+        print('mean reward:', mean_reward)
+        tf.contrib.summary.scalar('mean_reward', mean_reward)
+
         # make dataset from experience replay buffer
         gen = lambda: (exp for exp in buffer)
         ds = (tf.data.Dataset.from_generator(gen, output_types=(tf.float32, tf.int32, tf.float32))
               .shuffle(shuffle_size)
               .batch(batch_size))
-        
+
         print('training model...', end='')
         losses = []
         for i_te in range(train_epochs):
             print(f'{i_te}...', end='')
             for i_batch, batch in enumerate(ds):
+                global_step.assign_add(1) # increment global step
                 observations, actions, rewards = batch
-
+                
                 with tf.GradientTape() as tape:
                     logits = model(observations)
                     loss = policy_gradient_loss(logits, actions, rewards)
+                    tf.contrib.summary.scalar('loss', loss)
                     losses.append(loss)
+                    tf.contrib.summary.scalar('batch_mean_entropy', policy_entropy(logits, mean=True))
+                    tf.contrib.summary.scalar('batch_mean_reward', tf.reduce_mean(rewards))
+
                 grads = tape.gradient(loss, model.variables)
-                optimizer.apply_gradients(zip(grads, model.variables))
+                optimizer.apply_gradients(zip(grads, model.variables),
+                                          global_step=global_step)
 
         print('done')
         print('mean training loss:', np.mean(losses))
-        
+
         # save (checkpoint) the model every 10 epochs
         if (i_epoch + 1) % 10 == 0:
-            checkpoint.save(file_prefix=checkpoint_prefix)
+            if checkpoint:
+                checkpoint.save(file_prefix=checkpoint_prefix)
 
-
-    # visualize results of trained model
-    play(model, env, episodes=4)
 
 
 def test(model, env, checkpoint, checkpoint_dir, movie_path=None, start_trim=0):
@@ -477,9 +562,8 @@ def main():
     print('tf version:', tf.VERSION)
     print('tf keras version:', tf.keras.__version__)
 
-    tf.enable_eager_execution()
-
     parser = argparse.ArgumentParser()
+    parser.add_argument('--model-summary', default=False, action='store_true')
     parser.add_argument('--train', default=False, action='store_true')
     parser.add_argument('--test', default=False, action='store_true')
     parser.add_argument('--movie-path', default=None)
