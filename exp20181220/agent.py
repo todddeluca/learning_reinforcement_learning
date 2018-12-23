@@ -20,7 +20,7 @@ looks very linear. positive q-values (when ALL rewards are negative) is a bad si
 model02: oops.
 model03: tanh activation, 10 episodes, 1 training epoch, gamma=0.95. q-valeus are negative, so that is good. plotted q-values look like a plane with a positive slope for position (greater position = greater q-value) and no slope for velocity. Looks like the deep model is devolving into a linear model. Why?
 model04: Use random tile coding with linear model in attempt to approximate the Sutton and Barto approach
-model05: Use non-random overlapping tile coding in a better attempt to approximate S&B, learning_rate=1e-2, epsilon = 0.2. It wins!!! learning rate? epsilon? tiling?
+model05: Use non-random overlapping tile coding in a better attempt to approximate S&B, learning_rate=1e-2, epsilon = 0.2. It wins!!! It learned a policy (q-values) that worked OK (but not great) in 40 epochs. After more training, it reverted to being bad. learning rate? epsilon? tiling?
 '''
 
 
@@ -173,20 +173,22 @@ class AgentModel(tf.keras.Model):
             self.dense1 = tf.keras.layers.Dense(n_h, activation=activation)
         self.dense2 = tf.keras.layers.Dense(num_actions) # Q(s,a)
 
-    def call(self, x):
-        if not self.tiling:
-            x = self.dense1(x)
-            tf.contrib.summary.histogram('dense1_act', x)
-            tf.contrib.summary.histogram('dense1_weights', self.dense1.weights[0])
-            tf.contrib.summary.histogram('dense1_bias', self.dense1.weights[1])
-        else:
-            x = tile_encode(x, self.tiling)
-            
-        x = self.dense2(x)
-        tf.contrib.summary.histogram('dense2_act', x)
-        tf.contrib.summary.histogram('dense2_weights', self.dense2.weights[0])
-        tf.contrib.summary.histogram('dense2_bias', self.dense2.weights[1])
-        return x
+    def call(self, x, n=10):
+        # histogram summaries are heavy; avoid recording all of them.
+        with tf.contrib.summary.record_summaries_every_n_global_steps(n=n):
+            if not self.tiling:
+                x = self.dense1(x)
+                tf.contrib.summary.histogram('dense1_act', x)
+                tf.contrib.summary.histogram('dense1_weights', self.dense1.weights[0])
+                tf.contrib.summary.histogram('dense1_bias', self.dense1.weights[1])
+            else:
+                x = tile_encode(x, self.tiling)
+
+            x = self.dense2(x)
+            tf.contrib.summary.histogram('dense2_act', x)
+            tf.contrib.summary.histogram('dense2_weights', self.dense2.weights[0])
+            tf.contrib.summary.histogram('dense2_bias', self.dense2.weights[1])
+            return x
 
 
 def discounted_returns(rewards, gamma=1.0, normalize=False):
@@ -224,7 +226,7 @@ def value_loss(qvalues, actions, rewards, next_qvalues, gamma=1.0):
 
 def sample_action(qvalues, epsilon=0.0):
     '''
-    qvals: shape (batch_size, num_actions)
+    qvalues: shape (batch_size, num_actions)
     '''
     ps = tf.random_uniform(shape=qvalues.shape[:-1]) # (batch_size,)
     random_actions = tf.squeeze(tf.multinomial(tf.ones_like(qvalues), num_samples=1), axis=-1) # (batch_size,)
@@ -233,9 +235,16 @@ def sample_action(qvalues, epsilon=0.0):
     return selected_actions
 
 
+def display(model):
+    print(model.summary())
+    from tf.keras.utils.vis_utils import model_to_dot # visualize model
+    return SVG(model_to_dot(model).create(prog='dot', format='svg'))
+
+
 def visualize_model(model):
     '''
-    Visualize qvalues for mountain car model, to compare to plots in Sutton & Barto
+    Visualize qvalues for mountain car model, to compare to plots in Sutton & Barto.
+    Points are colored according to the action selected by the greedy policy.
     '''
     positions = np.linspace(-1.2, 0.6, 21)
     speeds = np.linspace(-0.07, 0.07, 21)
@@ -248,13 +257,20 @@ def visualize_model(model):
     qvalues = model.predict(obs_batch)
     print('some qvalues:', qvalues[:10])
     max_qvalues = tf.reduce_max(qvalues, axis=-1).numpy()
+    max_actions = tf.argmax(qvalues, axis=-1).numpy()
     x, y = np.array(list(zip(*observations)))
     z = max_qvalues
             
     from mpl_toolkits.mplot3d import Axes3D
+    # actions: 0, 1, 2 are left, null, right, respectively
+    colors = ['#dd3333', '#333333', '#33dd33']
+    cmap = matplotlib.colors.LinearSegmentedColormap.from_list('my_cmap', colors)
+    norm = matplotlib.colors.Normalize(vmin=0,vmax=2)
     fig = plt.figure()
     ax = fig.gca(projection='3d')
-    ax.plot_trisurf(x, y, z, linewidth=0.2, antialiased=True)
+#     ax.plot_trisurf(x, y, z, linewidth=0.2, antialiased=True)
+    ax.scatter(x, y, z, c=max_actions, cmap=cmap, norm=norm)
+    plt.title('green=right,grey=null,red=left')
     plt.show()
      
 
@@ -310,17 +326,16 @@ def run(args):
         # dummy training to initialize model (without saving a checkpoint)
         train(model, env, optimizer, global_step, 
               num_epoch=1, num_episodes=1, batch_size=batch_size, train_epochs=1)
-        model.summary()
+        model.summary() # print summary and graph of model
     elif args.train:
-        # tensorboard setup
+        # use tensorboard to log training progress
         summary_writer = tf.contrib.summary.create_file_writer(str(log_dir), flush_millis=5000)
-
         with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
             train(model, env, optimizer, global_step, 
                   num_epoch, num_episodes, batch_size, train_epochs,
                   checkpoint, checkpoint_prefix, epsilon=epsilon, gamma=gamma)
     elif args.test:
-        test(model, env, checkpoint, checkpoint_dir)
+        test(model, env)
     else:
         print('doing nothing.')
 
@@ -406,8 +421,10 @@ def train(model, env, optimizer, global_step, num_epoch, num_episodes, batch_siz
 
 
 
-def test(model, env, checkpoint, checkpoint_dir, num_episodes=100):
-    
+def test(model, env, num_episodes=100):
+    '''
+    Play game for num_episodes episodes. Use greedy policy (epsilon == 0).
+    '''
     # play game
     for i_epi in range(num_episodes):
         obs = env.reset()
