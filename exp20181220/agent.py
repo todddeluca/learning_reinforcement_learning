@@ -400,6 +400,8 @@ def train(model, env, optimizer, global_step, num_epoch, num_episodes, batch_siz
                 
                 with tf.GradientTape() as tape:
                     qvalues = model(observations)
+                    # oh no this does not look right. next_qvalues are in the scope of
+                    # the gradient tape.
                     next_qvalues = model(next_obervations)
                     loss = value_loss(qvalues, actions, rewards, next_qvalues, gamma=gamma)
                     tf.contrib.summary.scalar('loss', loss)
