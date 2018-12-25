@@ -114,7 +114,12 @@ def make_tiling_2d(x_min, x_max, y_min, y_max, num_tilings, freq=None, offsets=(
     return (tile_x_min, tile_x_max, tile_y_min, tile_y_max)
 
     
-def make_mountain_car_tiling(x_min=-1.2, x_max=0.6, y_min=-0.07, y_max=0.07, freq=8, tiles=512):
+def make_mountain_car_tiling(x_min=-1.2, x_max=0.6, y_min=-0.07, y_max=0.07, freq=8):
+    '''
+    freq: the number adjacent tiles that cover the whole range in one dimension. The
+    number of tiles in 2 dimensions is freq**2.  Also freq offset tilings are generated
+    leading to a total of freq**3 tiles that cover the range a total of freq times.
+    '''
     return make_tiling_2d(x_min, x_max, y_min, y_max, num_tilings=freq)
 
 
@@ -142,6 +147,14 @@ def tile_encode(obs, tiling):
     return obs_in_tile.astype(np.float32)
     
 
+class IdentityEmbedding():
+    def __init__(self, num_features):
+        self.num_features = num_features
+        
+    def __call__(self, x):
+        return x
+
+    
 class TilingEmbedding2d():
     
     def __init__(self, tiling):
@@ -240,8 +253,8 @@ def visualize_model(model):
     Visualize qvalues for mountain car model, to compare to plots in Sutton & Barto.
     Points are colored according to the action selected by the greedy policy.
     '''
-    positions = np.linspace(-1.2, 0.6, 41)
-    speeds = np.linspace(-0.07, 0.07, 41)
+    positions = np.linspace(-1.2, 0.6, 51)
+    speeds = np.linspace(-0.07, 0.07, 51)
     results = []
     observations = []
     for position in positions:
@@ -313,10 +326,10 @@ def run(args):
     model_id = 'model06'
     data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
     num_episodes = 1000
-    learning_rate=2e-2
+    learning_rate=1e-2
     epsilon = 0.1 # exploration rate
     gamma = 1.0 # 0.99 # discount rate
-    kind = 'qlearning' # 'montecarlo' # montecarlo or sarsa
+    kind = 'montecarlo' # montecarlo or sarsa or qlearning
     checkpoint_dir = data_dir / f'{model_id}_checkpoints'
     checkpoint_prefix = checkpoint_dir / 'ckpt'
     # different tensorboard log dir for each run
@@ -328,9 +341,10 @@ def run(args):
 #     env = gym.make('CartPole-v0')
     num_actions = env.action_space.n
     
-    tiling = make_mountain_car_tiling()
-#     model = TilingLinearSarsaModel(num_actions, tiling, learning_rate, gamma) 
-    model = LinearApproximationModel(num_actions, TilingEmbedding2d(tiling))   
+#     num_observation_dims = env.observation_space.shape[0]
+#     embedding = IdentityEmbedding(num_observation_dims)
+    embedding = TilingEmbedding2d(make_mountain_car_tiling(freq=8)) # 8 is the number of tilings from Sutton & Barto
+    model = LinearApproximationModel(num_actions, embedding)
 
     if args.restore_latest or args.restore_model:
         model_file = args.restore_model if args.restore_model else checkpoint.latest_path(checkpoint_dir)
