@@ -46,9 +46,16 @@ This attempt to get an agent to learn cellular automata rules that follow the or
 
 ## exp20181219 Policy Gradients and MountainCar-v0 and CartPole-v0
 
-Trying my hand at some OpenAI Gym environments. CartPole is easy. MountainCar is hard. Added Monte Carlo returns and a number of other features to the Policy Gradient Agent.
+Trying my hand at some OpenAI Gym environments. CartPole-v0 is easy. MountainCar-v0 is hard. Added Monte Carlo returns and a number of other features to the Policy Gradient Agent.
 
 
 ## exp20181220 Homebrew Q-Learning and MountainCar-v0
 
 Since policy gradients explores randomly and never gets a reward signal, it never updates its policy. What about Q-learning. In Sutton and Barto Chap 10, they tackle MountainCar with Coarse Coding (Tiling) and ~n-step Sarsa. In this experiment I try 1-step Q-learning with a deep network (1-hidden layer) and with a linear layer on top of a tiling encoding.  The tiling approach worked (after ~40 "epochs" of training) and then got worse after that. The deep network degraded to a linear function, which
+
+
+## exp20181223 MountainCar-v0, Sarsa, Q-learning, Monte Carlo, Tile Coding and Linear Approximation
+
+Stepping back from the deep networks for a bit, in this experiment I implemented 1-step Sarsa and Q-learning, and Monte Carlo algorithms.  I used a linear approximation model with tile coding to solve the MountainCar-v0 environment. In the Sutton and Barto book, Sarsa is used with tile coding.
+
+This worked well for MountainCar-v0. Applying it to other environments might require a different embedding. For example, it did not initially work for Taxi-v2, an environment designed to test hierarchical learning.

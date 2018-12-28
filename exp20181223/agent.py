@@ -332,17 +332,22 @@ def discounted_returns(rewards, gamma=1.0, normalize=False):
         
     return disc_returns
 
+'''
+Results:
+mode07, 1000 episodes, lr=1e-2, epsilon=0.1, gamma=1.0, sarsa, tile coding, mean episode reward (n=100) -112.91
+
+'''
 
 def run(args):
 
     exp_id = 'exp20181223'
-    model_id = 'model06'
+    model_id = 'model08'
     data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
-    num_episodes = 10000
-    learning_rate=1e-3
-    epsilon = 0.01 # exploration rate
+    num_episodes = 1000
+    learning_rate=1e-2
+    epsilon = 0.1 # exploration rate
     gamma = 1.0 # 0.99 # discount rate
-    kind = 'montecarlo' # montecarlo or sarsa or qlearning
+    kind = 'sarsa' # montecarlo or sarsa or qlearning
     checkpoint_dir = data_dir / f'{model_id}_checkpoints'
     checkpoint_prefix = checkpoint_dir / 'ckpt'
     # different tensorboard log dir for each run
@@ -350,16 +355,16 @@ def run(args):
     checkpoint = MyCheckpoint()
     
     # make environment
-#     env = gym.make('MountainCar-v0')
+    env = gym.make('MountainCar-v0')
 #     env = gym.make('CartPole-v0')
-#     num_observation_dims = env.observation_space.shape[0]
+    num_observation_dims = env.observation_space.shape[0] # Box Space
 #     env = gym.make('Taxi-v2')
-    env = gym.make('FrozenLake-v0')
-    num_observation_dims = env.observation_space.n
+#     env = gym.make('FrozenLake-v0')
+#     num_observation_dims = env.observation_space.n # Discrete Space
     
     num_actions = env.action_space.n
-#     embedding = IdentityEmbedding(num_observation_dims)
-    embedding = OneHotEmbedding(num_observation_dims) # for doing table-based RL with a linear model
+    embedding = IdentityEmbedding(num_observation_dims)
+#     embedding = OneHotEmbedding(num_observation_dims) # for doing table-based RL with a linear model
 #     embedding = TilingEmbedding2d(make_mountain_car_tiling(freq=8)) # 8 is the number of tilings from Sutton & Barto
     model = LinearApproximationModel(num_actions, embedding)
 
