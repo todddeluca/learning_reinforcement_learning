@@ -2,24 +2,28 @@
 
 From 0 to ... in code.
 
+
 ## To Do
 
-Methods/Agents:
+- Cross entropy method, like Parameter-Exploring Policy Gradients (PEPG, 2009) or OpenAI approach, on MountainCar-v0
+- DQN (replay buffer, target network, fix semi-gradient bug) on MountainCar-v0 w/o Tiling
+- Recurrent/memory models (to make non-markovian observations more markovian)
 
-- Cross entropy method, like Parameter-Exploring Policy Gradients (PEPG, 2009)
-- VPG
+## Maybe Do
+
 - n-step Q-learning
 - n-step Sarsa
 - REINFORCE
 - A2C
-- DQN (replay buffer, target network)
 - PPO
 
-Environments:
-
-- grid worlds
-- pacman
+- RL course: implement berkeley grid worlds
+- RL course: implement berkeley pacman as Gym Env
+  - pixel-based implementation: https://github.com/sohamghosh121/PacmanGym
 - classic control (openai gym)
+
+- World models
+- Curiosity driven exploration
 
 
 ## exp20181216 Vanilla Policy Gradients and Hot Forests
