@@ -252,8 +252,8 @@ def visualize_model(model):
     Visualize qvalues for mountain car model, to compare to plots in Sutton & Barto.
     Points are colored according to the action selected by the greedy policy.
     '''
-    positions = np.linspace(-1.2, 0.6, 21)
-    speeds = np.linspace(-0.07, 0.07, 21)
+    positions = np.linspace(-1.2, 0.6, 41)
+    speeds = np.linspace(-0.07, 0.07, 41)
     results = []
     observations = []
     for position in positions:
@@ -299,7 +299,9 @@ Model04: 8x8x32 ConvAgentModel is too slow on laptop. Much bigger than AgentMode
 Model05: 8x8x8 ConvAgentModel
 slow. enough channels to learn diverse features? enough height and width? A bigger computer would be useful.
 
-Model06: 4x4x32 ConvAgentModel
+Model06: 4x4x32 ConvAgentModel, target_update_freq=1000, batch_size=32, train_freq=1,
+learning_starts=1000, checkpoint_freq=1000, learning_rate=1e-5, epsilon=0.1, gamma=1.0,
+n_h=32, conv_img_size = (4, 4)
 tiny image, more channels.
 /Users/tfd/data/2018/learning_reinforcement_learning/exp20190104/model06_checkpoints/ckpt-60
 60: some spiraling of policy and q-values.
@@ -307,14 +309,35 @@ tiny image, more channels.
 100: policy visualization looks like it is struggling to learn a spiral. getting closer.
 Continue training for another 100k steps.  Restore latest model, rebuild buffer. 
 104: Crazy huge changes in q-values policy visualization. Flatter, more linear. Bad policy.
-137: bowl shaped qvalues. working policy.
+137: bowl shaped qvalues. working policy. mean episode reward: -190.79
+143: mean episode reward: -165.46
+200: nice spiral bowl. -168.89 mean episode reward
+/Users/tfd/data/2018/learning_reinforcement_learning/exp20190104/model06_checkpoints/ckpt-200
+
+model07: AgentModel, n_h=128, activation=elu
+100: mean episode reward: -190.11
+200: nice bowl. policy looks bad. mean episode reward: -200.0
+policy seems to work better with some exploration noise than in pure greedy mode.
+
+model08: ConvAgentModel, conv_img_size=(4, 4), n_h=16, activation=elu
+400: inverted q-value surface in visualization. A curvy plane with a high corner at (-1.2, -0.07)
+and a low corner at (0.5, 0.07). Weird policy that sort of maybe could work, though it never wins. 
+mean episode reward: -200.0
+A brief scan reveals no earlier checkpoint with better performance.
+
+model09: ConvAgentModel, 4x4x32, elu.
+215: bowl shaped q-values with a strange but maybe ok policy. mean episode reward: -159.98
+291: bowl with some spiraling asymmetry. good looking policy. mean episode reward: -167.48
+311: bowl with gorgeous policy split around 0 velocity. mean episode reward: -137.24
+400: bowl with decent looking policy with a lot of pass actions in some parts of the space.  mean episode reward: -179.57
+
 '''
 
 def run(args):
 
 
     exp_id = 'exp20190104'
-    model_id = 'model06'
+    model_id = 'model09'
     data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
     batch_size = 32
     target_update_freq = 1000 # update target network every n episodes
@@ -322,7 +345,7 @@ def run(args):
     learning_starts = 1000
     checkpoint_freq=1000
     buffer_size = 10000 # number of tuples to keep in the buffer
-    num_steps = 100000 #
+    num_steps = 400000 #
     learning_rate=1e-5
     epsilon = 0.1 # exploration rate
     gamma = 1.0 # discount rate
@@ -330,8 +353,10 @@ def run(args):
     checkpoint_prefix = checkpoint_dir / 'ckpt'
     # different tensorboard log dir for each run
     log_dir = data_dir / f'log/{model_id}/{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
-    model_type = 'ConvAgentModel' # 'AgentModel'
-    activation = 'relu'
+#     model_type = 'AgentModel' 
+    model_type = 'ConvAgentModel'
+    activation = 'elu' # 'relu'
+#     n_h = 128
     n_h = 32 # number of hidden units
     conv_img_size = (4, 4) # (8, 8)
     

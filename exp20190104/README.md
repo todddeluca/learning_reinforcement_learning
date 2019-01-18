@@ -2,6 +2,13 @@
 
 https://gym.openai.com/envs/MountainCar-v0/
 
+Using a 2d conv net lead to a reasonable policy, though not 
+one that solved the game (100 episode avg score > -110).
+
+The fully-connected network did worse. There is still more 
+to explore there. 
+
+
 ## Installation
 
 

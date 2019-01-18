@@ -5,9 +5,11 @@ From 0 to ... in code.
 
 ## To Do
 
+- A Deep Policy Gradient method on MountainCar-v0.
 - Cross entropy method, like Parameter-Exploring Policy Gradients (PEPG, 2009) or OpenAI approach, on MountainCar-v0
-- DQN (replay buffer, target network, fix semi-gradient bug) on MountainCar-v0 w/o Tiling
 - Recurrent/memory models (to make non-markovian observations more markovian)
+- Add 100-episode moving average statistic
+- Track best saved model
 
 ## Maybe Do
 
@@ -63,3 +65,26 @@ Since policy gradients explores randomly and never gets a reward signal, it neve
 Stepping back from the deep networks for a bit, in this experiment I implemented 1-step Sarsa and Q-learning, and Monte Carlo algorithms.  I used a linear approximation model with tile coding to solve the MountainCar-v0 environment. In the Sutton and Barto book, Sarsa is used with tile coding.
 
 This worked well for MountainCar-v0. Applying it to other environments might require a different embedding. For example, it did not initially work for Taxi-v2, an environment designed to test hierarchical learning.
+
+
+## exp20181228 MountainCar-v0, Evolutionary Strageties type of method
+
+Under Construction.
+
+
+## exp20190104 MountainCar-v0, Deep Q-Learning
+
+I fixed the Deep Q-Learning implementation from exp20181220, by:
+
+- adding a proper replay buffer
+- using a target network for Q(s', a'), which also fixed the gradients.
+
+I tried a fully connected network, which has not yet worked ok. I also
+tried a 2d conv net by embedding the input as a 2d multichannel image,
+which worked ok.
+I tried more (residual) layers, though only 4 residual blocks. The best
+network took ~300,000 training steps.
+
+
+
+
