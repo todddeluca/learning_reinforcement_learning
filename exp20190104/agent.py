@@ -68,15 +68,72 @@ class ReplayBuffer():
         
         return obs, actions, rewards, next_obs, dones
 
-    
+
+class Conv1DAgentModel(tf.keras.Model):
+    '''
+    Input: state
+    Output: Q(s,a) for each action
+    '''
+    def __init__(self, num_actions, size, n_h, activation, n_l):
+        '''
+        n_h: number of hidden units or filters per layer.
+        n_l: number of layers, in this case residual blocks
+        size: an integer or pair of integers, height and width.
+        
+        Project the input into a 1d image then use a convolutional net.
+        '''
+        super().__init__()
+        self.num_actions = num_actions
+        self.n_h = n_h
+        self.n_l = n_l
+        self.size = size
+        self.activation = activation
+        
+        # embed input into a (height, width, channel) tensor space, for Conv2D
+        self.dense1 = tf.keras.layers.Dense(self.size * self.n_h, activation=activation) 
+        
+        # residual blocks
+        self.residual_blocks = []
+        for i in range(self.n_l):
+            conv = tf.keras.layers.Conv1D(self.n_h, kernel_size=3, padding='same', activation=activation)
+            bn = tf.keras.layers.BatchNormalization()
+            self.residual_blocks.extend([conv, bn])
+            
+        self.residual2 = tf.keras.models.Sequential(self.residual_blocks)
+       
+        # output q-values
+        self.dense3 = tf.keras.layers.Dense(num_actions) # Q(s,a)
+
+    def call(self, x, training=False):
+        x = tf.convert_to_tensor(x) # convert numpy arrays
+        
+        # input embedding
+        x = self.dense1(x)
+        x = tf.reshape(x, shape=(-1, self.size, self.n_h)) # shape (batch_size, length, n_h)
+
+        # residual layers
+        for i in range(self.n_l):
+            x_in = x
+            x = self.residual_blocks[2 * i](x) # dense layer
+            x = self.residual_blocks[2 * i + 1](x, training=training) # bn layer
+            x += x_in
+
+        x = tf.reshape(x, shape=(-1, self.size * self.n_h)) # shape (batch_size, length * n_h)
+
+        x = self.dense3(x) # shape (batch_size, num_actions)
+
+        return x
+
+
 class ConvAgentModel(tf.keras.Model):
     '''
     Input: state
     Output: Q(s,a) for each action
     '''
-    def __init__(self, num_actions, size=(16, 16), n_h=128, activation='relu'):
+    def __init__(self, num_actions, size=(16, 16), n_h=128, activation='relu', n_l=3):
         '''
         n_h: number of hidden units or filters per layer.
+        n_l: number of layers, in this case residual blocks
         size: an integer or pair of integers, height and width.
         
         Project the input into a 2d image then use a convolutional net.
@@ -84,6 +141,7 @@ class ConvAgentModel(tf.keras.Model):
         super().__init__()
         self.num_actions = num_actions
         self.n_h = n_h
+        self.n_l = n_l
         self.size = (size, size) if isinstance(size, numbers.Number) else size
         print('ConvAgentModel .size=', self.size)
         self.activation = activation
@@ -92,15 +150,14 @@ class ConvAgentModel(tf.keras.Model):
         self.dense1 = tf.keras.layers.Dense(self.size[0] * self.size[1] * self.n_h, activation=activation) 
         
         # residual blocks
-        self.conv2a = tf.keras.layers.Conv2D(self.n_h, kernel_size=(3, 3), padding='same', activation=activation)
-        self.bn2a = tf.keras.layers.BatchNormalization()
-        
-        self.conv2b = tf.keras.layers.Conv2D(self.n_h, kernel_size=(3, 3), padding='same', activation=activation)
-        self.bn2b = tf.keras.layers.BatchNormalization()
-        
-        self.conv2c = tf.keras.layers.Conv2D(self.n_h, kernel_size=(3, 3), padding='same', activation=activation)
-        self.bn2c = tf.keras.layers.BatchNormalization()
-        
+        self.residual_blocks = []
+        for i in range(self.n_l):
+            conv = tf.keras.layers.Conv2D(self.n_h, kernel_size=(3, 3), padding='same', activation=activation)
+            bn = tf.keras.layers.BatchNormalization()
+            self.residual_blocks.extend([conv, bn])
+            
+        self.residual2 = tf.keras.models.Sequential(self.residual_blocks)
+       
         # output q-values
         self.dense3 = tf.keras.layers.Dense(num_actions) # Q(s,a)
 
@@ -111,21 +168,12 @@ class ConvAgentModel(tf.keras.Model):
         x = self.dense1(x)
         x = tf.reshape(x, shape=(-1, self.size[0], self.size[1], self.n_h)) # shape (batch_size, height, width, n_h)
 
-        # residual layer
-        x_in = x
-        x = self.conv2a(x)
-        x = self.bn2a(x, training=training)
-        x += x_in
-
-        x_in = x
-        x = self.conv2b(x)
-        x = self.bn2b(x, training=training)
-        x += x_in
-
-        x_in = x
-        x = self.conv2c(x)
-        x = self.bn2c(x, training=training)
-        x += x_in
+        # residual layers
+        for i in range(self.n_l):
+            x_in = x
+            x = self.residual_blocks[2 * i](x) # dense layer
+            x = self.residual_blocks[2 * i + 1](x, training=training) # bn layer
+            x += x_in
 
         x = tf.reshape(x, shape=(-1, self.size[0] * self.size[1] * self.n_h)) # shape (batch_size, height * width * n_h)
 
@@ -134,14 +182,13 @@ class ConvAgentModel(tf.keras.Model):
         return x
 
 
-
 # Helpful example or residual block: https://www.tensorflow.org/tutorials/eager/custom_layers
 class AgentModel(tf.keras.Model):
     '''
     Input: state
     Output: Q(s,a) for each action
     '''
-    def __init__(self, num_actions, n_h=128, activation='relu'):
+    def __init__(self, num_actions, n_h=128, activation='relu', n_l=3):
         '''
         num_states: 
         '''
@@ -149,62 +196,42 @@ class AgentModel(tf.keras.Model):
         self.num_actions = num_actions
         self.n_h = n_h
         self.activation = activation
+        self.n_l = n_l
         
         # project input into n_h dimensional vector space
         self.dense1 = tf.keras.layers.Dense(n_h, activation=activation) 
         
         # residual blocks
-        self.dense2a = tf.keras.layers.Dense(n_h, activation=activation)
-        self.bn2a = tf.keras.layers.BatchNormalization()
-        self.dense2b = tf.keras.layers.Dense(n_h, activation=activation)
-        self.bn2b = tf.keras.layers.BatchNormalization()
-        self.dense2c = tf.keras.layers.Dense(n_h, activation=activation)
-        self.bn2c = tf.keras.layers.BatchNormalization()
+        self.residual_blocks = []
+        for i in range(self.n_l):
+            self.residual_blocks.append(tf.keras.layers.Dense(n_h, activation=activation))
+            self.residual_blocks.append(tf.keras.layers.BatchNormalization())
+            
+        self.residual2 = tf.keras.models.Sequential(self.residual_blocks)
+        
+#         self.dense2a = tf.keras.layers.Dense(n_h, activation=activation)
+#         self.bn2a = tf.keras.layers.BatchNormalization()
+#         self.dense2b = tf.keras.layers.Dense(n_h, activation=activation)
+#         self.bn2b = tf.keras.layers.BatchNormalization()
+#         self.dense2c = tf.keras.layers.Dense(n_h, activation=activation)
+#         self.bn2c = tf.keras.layers.BatchNormalization()
         
         # output q-values
         self.dense3 = tf.keras.layers.Dense(num_actions) # Q(s,a)
-
-    def layer_summary(self, x, layer, name, n=1):
-        # histogram summaries are heavy; avoid recording all of them.
-        with tf.contrib.summary.record_summaries_every_n_global_steps(n=n):
-#             tf.contrib.summary.histogram(f'{name}_out', x)
-#             tf.contrib.summary.histogram(f'{name}_weights', layer.weights[0])
-#             tf.contrib.summary.histogram(f'{name}_bias', layer.weights[1])
-            pass
         
     def call(self, x, n=20, training=False):
         x = tf.convert_to_tensor(x) # convert numpy arrays
         
         x = self.dense1(x)
-        if training:
-            self.layer_summary(x, self.dense1, 'dense1', n=n)
 
-        # residual layer
-        x_in = x
-        x = self.dense2a(x)
-        if training:
-            self.layer_summary(x, self.dense2a, 'dense2a', n=n)
-        x = self.bn2a(x, training=training)
-        x += x_in
-
-        x_in = x
-        x = self.dense2b(x)
-        if training:
-            self.layer_summary(x, self.dense2b, 'dense2b', n=n)
-        x = self.bn2b(x, training=training)
-        x += x_in
-
-        x_in = x
-        x = self.dense2c(x)
-        if training:
-            self.layer_summary(x, self.dense2c, 'dense2c', n=n)
-        x = self.bn2c(x, training=training)
-        x += x_in
+        # residual layers
+        for i in range(self.n_l):
+            x_in = x
+            x = self.residual_blocks[2 * i](x) # dense layer
+            x = self.residual_blocks[2 * i + 1](x, training=training) # bn layer
+            x += x_in
 
         x = self.dense3(x)
-        if training:
-            self.layer_summary(x, self.dense3, 'dense3', n=n)
-
         return x
 
 
@@ -325,19 +352,30 @@ and a low corner at (0.5, 0.07). Weird policy that sort of maybe could work, tho
 mean episode reward: -200.0
 A brief scan reveals no earlier checkpoint with better performance.
 
-model09: ConvAgentModel, 4x4x32, elu.
+model09: ConvAgentModel, 4x4x32, elu. (default: n_l=3)
 215: bowl shaped q-values with a strange but maybe ok policy. mean episode reward: -159.98
 291: bowl with some spiraling asymmetry. good looking policy. mean episode reward: -167.48
 311: bowl with gorgeous policy split around 0 velocity. mean episode reward: -137.24
 400: bowl with decent looking policy with a lot of pass actions in some parts of the space.  mean episode reward: -179.57
 
+model10: AgentModel, n_h=64, n_l=10, activation=elu
+model training seems unstable. performance is poor.
+87: bowl shaped. ok policy. mean episode reward: -168.71
+120: bowl shaped q-value surface. so-so policy with too much grey. mean episode reward: -163.42
+302: one of the best models, I think. mean episode reward: -200.0
+454: more training does not help. :-( l2 regularization needed? mean episode reward: -200.0
+
+model11: ConvAgentModel 4x4, n_h=32, n_l=10, elu. 
+
+model13: Conv1DAgentModel size=16, n_h=32, n_l=3, elu
+400: nice bowl, nice policy. mean episode reward: -124.6. best deep model result yet. Still not "solving" mountain car (mean episode reward >= -110)
 '''
 
 def run(args):
 
 
     exp_id = 'exp20190104'
-    model_id = 'model09'
+    model_id = 'model13'
     data_dir = Path('/Users/tfd/data/2018/learning_reinforcement_learning') / exp_id
     batch_size = 32
     target_update_freq = 1000 # update target network every n episodes
@@ -355,10 +393,13 @@ def run(args):
     log_dir = data_dir / f'log/{model_id}/{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
 #     model_type = 'AgentModel' 
     model_type = 'ConvAgentModel'
+    model_type = 'Conv1DAgentModel'
     activation = 'elu' # 'relu'
-#     n_h = 128
+#     n_h = 64
     n_h = 32 # number of hidden units
+    n_l = 3 # default: 3
     conv_img_size = (4, 4) # (8, 8)
+    conv_size = 16
     
     # make environment
     env = gym.make('MountainCar-v0')
@@ -367,11 +408,14 @@ def run(args):
     
     print('model_type:', model_type)
     if model_type == 'ConvAgentModel':
-        model = ConvAgentModel(num_actions, size=conv_img_size, activation=activation, n_h=n_h)
-        target_model = ConvAgentModel(num_actions, size=conv_img_size, activation=activation, n_h=n_h)
+        model = ConvAgentModel(num_actions, size=conv_img_size, activation=activation, n_h=n_h, n_l=n_l)
+        target_model = ConvAgentModel(num_actions, size=conv_img_size, activation=activation, n_h=n_h, n_l=n_l)
     elif model_type == 'AgentModel':
-        model = AgentModel(num_actions, activation=activation, n_h=n_h)    
-        target_model = AgentModel(num_actions, activation=activation, n_h=n_h)  
+        model = AgentModel(num_actions, activation=activation, n_h=n_h, n_l=n_l)    
+        target_model = AgentModel(num_actions, activation=activation, n_h=n_h, n_l=n_l)
+    elif model_type == 'Conv1DAgentModel':
+        model = Conv1DAgentModel(num_actions, size=conv_size, activation=activation, n_h=n_h, n_l=n_l)
+        target_model = Conv1DAgentModel(num_actions, size=conv_size, activation=activation, n_h=n_h, n_l=n_l)
         
 #     optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate)
 #     optimizer=tf.train.AdamOptimizer(learning_rate=learning_rate)
@@ -387,11 +431,10 @@ def run(args):
     if args.visualize:
         visualize_model(model)
     elif args.model_summary:
-        num_epoch = 1
-        num_episodes = 1
         # dummy training to initialize model (without saving a checkpoint)
-        train(model, target_model, env, optimizer, global_step, 
-              num_epoch=1, num_episodes=1, batch_size=batch_size, train_epochs=1)
+        train(model, target_model, env, optimizer, global_step,
+              batch_size, buffer_size, target_update_freq, train_freq,
+              num_steps=1)
         model.summary() # print summary and graph of model
     elif args.train:
         # use tensorboard to log training progress
