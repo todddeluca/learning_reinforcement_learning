@@ -8,6 +8,7 @@ DONE
 - Experience Replay
 - Target Network, called outside gradient tape block
 - 2D Embedding for ConvNet
+- 1D Embedding for ConvNet
 
 TODO
 ====

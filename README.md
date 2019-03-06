@@ -79,12 +79,15 @@ I fixed the Deep Q-Learning implementation from exp20181220, by:
 - adding a proper replay buffer
 - using a target network for Q(s', a'), which also fixed the gradients.
 
-I tried a fully connected network, which has not yet worked ok. I also
-tried a 2d conv net by embedding the input as a 2d multichannel image,
+I tried a fully connected network, which has not yet worked ok. 
+
+I also tried a 2d conv net by embedding the input as a 2d multichannel image,
 which worked ok.
+
 I tried more (residual) layers, though only 4 residual blocks. The best
 network took ~300,000 training steps.
 
+A 1d conv net worked best of all so far
 
 
 
